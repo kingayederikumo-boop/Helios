@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { VisualizerCanvas, type OrbStyle, type VisualizerMode } from "@/components/visualizer-canvas";
 import { Engine } from "@/lib/audio/engine";
 import { listTracks, loadTrackBlob, type Track } from "@/lib/library/tracks";
 
@@ -10,13 +11,11 @@ export const Route = createFileRoute("/play")({
   component: VisualizerScreen,
 });
 
-type VisualizerMode = "orb" | "wave";
-type OrbStyle = "blackhole" | "supernova" | "plasma" | "lightning" | "glow";
-
 function VisualizerScreen() {
   const { id } = Route.useSearch();
   const navigate = useNavigate();
   const engineRef = useRef<Engine | null>(null);
+  const [engine, setEngine] = useState<Engine | null>(null);
   const [track, setTrack] = useState<Track | null>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -24,7 +23,6 @@ function VisualizerScreen() {
   const [error, setError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // Visualizer settings (persisted later)
   const [mode, setMode] = useState<VisualizerMode>("orb");
   const [orbStyle, setOrbStyle] = useState<OrbStyle>("blackhole");
   const [revolve, setRevolve] = useState(true);
@@ -32,8 +30,9 @@ function VisualizerScreen() {
   const [edgeColor, setEdgeColor] = useState("#ff6b35");
 
   useEffect(() => {
-    const engine = new Engine();
-    engineRef.current = engine;
+    const eng = new Engine();
+    engineRef.current = eng;
+    setEngine(eng);
 
     void (async () => {
       const tracks = await listTracks();
@@ -43,8 +42,8 @@ function VisualizerScreen() {
         try {
           const blob = await loadTrackBlob(found);
           if (blob) {
-            engine.unlock();
-            await engine.playBlob(blob);
+            eng.unlock();
+            await eng.playBlob(blob);
             setPlaying(true);
           }
         } catch (err) {
@@ -63,7 +62,7 @@ function VisualizerScreen() {
 
     return () => {
       window.clearInterval(timer);
-      engine.dispose();
+      eng.dispose();
       engineRef.current = null;
     };
   }, [id]);
@@ -82,27 +81,24 @@ function VisualizerScreen() {
 
   return (
     <main className="relative h-dvh overflow-hidden bg-bg text-fg">
-      {/* Visualizer canvas area — will be replaced with real visualizer */}
-      <div className="absolute inset-0 flex items-center justify-center">
-        <div className="text-center text-muted">
-          <p className="text-sm">Visualizer</p>
-          <p className="mt-1 text-xs opacity-60">
-            {mode} · {orbStyle} {revolve && mode === "orb" ? "· revolving" : ""}
-          </p>
-        </div>
-      </div>
+      <VisualizerCanvas
+        engine={engine}
+        mode={mode}
+        orbStyle={orbStyle}
+        revolve={revolve}
+        edgeColor={edgeColor}
+      />
 
-      {/* Edge glow placeholder */}
       {edgeGlow && (
         <div
-          className="pointer-events-none absolute inset-0 rounded-[2rem]"
+          className="pointer-events-none absolute inset-0 rounded-[1.5rem]"
           style={{
-            boxShadow: `inset 0 0 40px ${edgeColor}55, 0 0 30px ${edgeColor}33`,
+            boxShadow: `inset 0 0 50px ${edgeColor}66, 0 0 40px ${edgeColor}44`,
+            opacity: 0.85,
           }}
         />
       )}
 
-      {/* Top bar — song info only */}
       <header className="safe-top pointer-events-none absolute inset-x-0 top-0 z-10 px-5 pt-4">
         <div className="flex items-start justify-between gap-3">
           <button
@@ -131,7 +127,6 @@ function VisualizerScreen() {
         </div>
       )}
 
-      {/* Bottom handle to open drawer */}
       <button
         type="button"
         onClick={() => setDrawerOpen(true)}
@@ -140,7 +135,6 @@ function VisualizerScreen() {
         <div className="h-1.5 w-12 rounded-full bg-fg/30" />
       </button>
 
-      {/* Bottom Drawer */}
       {drawerOpen && (
         <>
           <div
@@ -156,7 +150,7 @@ function VisualizerScreen() {
               <button
                 type="button"
                 onClick={toggle}
-                className="flex h-14 w-14 items-center justify-center rounded-full bg-fg text-bg"
+                className="flex h-14 w-14 items-center justify-center rounded-full bg-fg text-bg text-lg"
               >
                 {playing ? "❚❚" : "▶"}
               </button>
