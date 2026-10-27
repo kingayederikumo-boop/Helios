@@ -13,7 +13,7 @@ export const Route = createRootRoute({
       { title: APP_NAME },
       {
         name: "description",
-        content: "A solar-system audio visualizer for music on your device.",
+        content: "Audio visualizer with orbs, waveforms, and edge glow. Music on your device.",
       },
       { name: "theme-color", content: "#07080c" },
     ],
