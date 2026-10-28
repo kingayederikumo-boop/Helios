@@ -24,9 +24,18 @@ type Levels = {
 
 type Dust = { x: number; y: number; z: number; s: number; a: number };
 
+/** Particle on an orbital ring (black hole / galaxy style) */
+type RingParticle = {
+  angle: number;
+  radius: number; // normalized 0–1 across the disk
+  speed: number;
+  size: number;
+  alpha: number;
+  plane: number; // which tilt plane 0,1,2
+};
+
 const SILENT: Levels = { bass: 0, mid: 0, high: 0, air: 0, energy: 0, beat: 0 };
 
-// Colour variants for the lightning-style energy orb (from your grid ref)
 const LIGHTNING_COLORS = [
   "#ff2a6d",
   "#9b5de5",
@@ -53,8 +62,26 @@ function makeDust(w: number, h: number, count: number): Dust[] {
       x: Math.random() * w,
       y: Math.random() * h,
       z: 0.2 + Math.random() * 0.8,
-      s: 0.4 + Math.random() * 1.8,
-      a: 0.15 + Math.random() * 0.55,
+      s: 0.4 + Math.random() * 1.6,
+      a: 0.12 + Math.random() * 0.5,
+    });
+  }
+  return out;
+}
+
+function makeRingParticles(count: number): RingParticle[] {
+  const out: RingParticle[] = [];
+  for (let i = 0; i < count; i++) {
+    // Prefer denser mid-disk (accretion look)
+    const u = Math.random();
+    const radius = 0.35 + Math.pow(u, 0.7) * 0.65;
+    out.push({
+      angle: Math.random() * Math.PI * 2,
+      radius,
+      speed: (0.4 + Math.random() * 0.9) * (1.2 - radius * 0.4),
+      size: 0.6 + Math.random() * 1.8,
+      alpha: 0.25 + Math.random() * 0.75,
+      plane: i % 3,
     });
   }
   return out;
@@ -76,6 +103,7 @@ export const VisualizerCanvas = memo(function VisualizerCanvas({
   const edgeColorRef = useRef(edgeColor);
   const edgeGlowRef = useRef(edgeGlow);
   const dustRef = useRef<Dust[]>([]);
+  const ringRef = useRef<RingParticle[]>([]);
   const sizeRef = useRef({ w: 0, h: 0 });
   const colorIdxRef = useRef(0);
 
@@ -91,6 +119,10 @@ export const VisualizerCanvas = memo(function VisualizerCanvas({
     if (!canvas) return;
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
+
+    if (ringRef.current.length === 0) {
+      ringRef.current = makeRingParticles(1400);
+    }
 
     let frame = 0;
     let lastBeat = 0;
@@ -115,7 +147,7 @@ export const VisualizerCanvas = memo(function VisualizerCanvas({
 
       if (sizeRef.current.w !== w || sizeRef.current.h !== h || dustRef.current.length === 0) {
         sizeRef.current = { w, h };
-        dustRef.current = makeDust(w, h, 180);
+        dustRef.current = makeDust(w, h, 160);
       }
 
       const live = engineRef.current;
@@ -125,8 +157,7 @@ export const VisualizerCanvas = memo(function VisualizerCanvas({
       const t = now / 1000;
       const style = styleRef.current;
 
-      // Cycle lightning colour on strong beats
-      if (levels.beat > 0.55 && t - lastBeat > 0.25) {
+      if (levels.beat > 0.55 && t - lastBeat > 0.22) {
         colorIdxRef.current = (colorIdxRef.current + 1) % LIGHTNING_COLORS.length;
         lastBeat = t;
       }
@@ -137,7 +168,18 @@ export const VisualizerCanvas = memo(function VisualizerCanvas({
       if (modeRef.current === "wave") {
         drawWave(ctx, w, h, levels, t);
       } else {
-        drawOrb(ctx, w, h, style, revolveRef.current, levels, t, playing, colorIdxRef.current);
+        drawOrb(
+          ctx,
+          w,
+          h,
+          style,
+          revolveRef.current,
+          levels,
+          t,
+          playing,
+          colorIdxRef.current,
+          ringRef.current,
+        );
       }
 
       if (edgeGlowRef.current) {
@@ -171,50 +213,31 @@ function paintBackground(
   const maxR = Math.max(w, h);
 
   const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 0.95);
-  if (style === "supernova") {
-    bg.addColorStop(0, "#1a0806");
-    bg.addColorStop(0.5, "#080308");
-    bg.addColorStop(1, "#020105");
-  } else if (style === "plasma") {
-    bg.addColorStop(0, "#050c18");
-    bg.addColorStop(0.5, "#03060e");
-    bg.addColorStop(1, "#010208");
-  } else if (style === "lightning") {
-    bg.addColorStop(0, "#0a0612");
-    bg.addColorStop(0.5, "#05030a");
-    bg.addColorStop(1, "#020106");
-  } else {
-    bg.addColorStop(0, "#0a050c");
-    bg.addColorStop(0.5, "#040208");
-    bg.addColorStop(1, "#010105");
-  }
+  bg.addColorStop(0, style === "plasma" ? "#040a14" : style === "lightning" ? "#080510" : "#060308");
+  bg.addColorStop(0.55, "#030208");
+  bg.addColorStop(1, "#010104");
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
 
-  // Nebula haze — denser near edges like the refs
   ctx.save();
   ctx.globalCompositeOperation = "screen";
-  ctx.globalAlpha = 0.22 + levels.energy * 0.25 + levels.beat * 0.1;
+  ctx.globalAlpha = 0.15 + levels.energy * 0.2;
   const n1 = ctx.createRadialGradient(
-    cx + Math.sin(t * 0.1) * 40,
-    cy + Math.cos(t * 0.08) * 30,
+    cx + Math.sin(t * 0.08) * 30,
+    cy,
     0,
     cx,
     cy,
-    maxR * 0.6,
+    maxR * 0.55,
   );
   if (style === "supernova") {
-    n1.addColorStop(0, "rgba(255, 80, 25, 0.55)");
-    n1.addColorStop(0.4, "rgba(160, 30, 20, 0.25)");
+    n1.addColorStop(0, "rgba(255, 70, 20, 0.45)");
   } else if (style === "plasma") {
-    n1.addColorStop(0, "rgba(40, 160, 255, 0.45)");
-    n1.addColorStop(0.4, "rgba(20, 60, 160, 0.2)");
+    n1.addColorStop(0, "rgba(40, 140, 255, 0.35)");
   } else if (style === "lightning") {
-    n1.addColorStop(0, "rgba(150, 50, 255, 0.4)");
-    n1.addColorStop(0.4, "rgba(80, 20, 140, 0.2)");
+    n1.addColorStop(0, "rgba(120, 50, 255, 0.35)");
   } else {
-    n1.addColorStop(0, "rgba(255, 90, 30, 0.4)");
-    n1.addColorStop(0.4, "rgba(100, 25, 60, 0.18)");
+    n1.addColorStop(0, "rgba(40, 180, 255, 0.3)");
   }
   n1.addColorStop(1, "transparent");
   ctx.fillStyle = n1;
@@ -230,34 +253,34 @@ function drawStarDust(
   levels: Levels,
   t: number,
 ) {
-  const drift = 0.12 + levels.energy * 0.5;
-  const pulse = 0.65 + levels.beat * 0.7 + levels.energy * 0.35;
+  const drift = 0.1 + levels.energy * 0.45;
+  const pulse = 0.6 + levels.beat * 0.65 + levels.energy * 0.3;
 
   ctx.save();
   for (const p of dust) {
-    p.x += (0.12 + p.z * 0.45) * drift;
-    p.y += Math.sin(t * 0.35 + p.x * 0.01) * 0.1 * p.z;
+    p.x += (0.1 + p.z * 0.4) * drift;
+    p.y += Math.sin(t * 0.3 + p.x * 0.01) * 0.08 * p.z;
     if (p.x > w + 4) p.x = -4;
     if (p.y > h + 4) p.y = -4;
     if (p.y < -4) p.y = h + 4;
 
-    const alpha = Math.min(1, p.a * pulse * (0.45 + p.z));
-    const size = p.s * (0.55 + p.z * 0.9) * (1 + levels.high * 0.4);
+    const alpha = Math.min(1, p.a * pulse * (0.4 + p.z));
+    const size = p.s * (0.5 + p.z * 0.85) * (1 + levels.high * 0.35);
 
-    ctx.globalAlpha = alpha * 0.4;
-    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size * 4);
-    g.addColorStop(0, "rgba(255, 240, 210, 0.95)");
-    g.addColorStop(0.35, "rgba(255, 170, 100, 0.35)");
+    ctx.globalAlpha = alpha * 0.35;
+    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size * 3.5);
+    g.addColorStop(0, "rgba(200, 230, 255, 0.9)");
+    g.addColorStop(0.4, "rgba(120, 180, 255, 0.3)");
     g.addColorStop(1, "transparent");
     ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, size * 4, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, size * 3.5, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = "rgba(255, 250, 240, 0.95)";
+    ctx.fillStyle = "rgba(230, 245, 255, 0.95)";
     ctx.beginPath();
-    ctx.arc(p.x, p.y, size * 0.5, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, size * 0.45, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
@@ -271,7 +294,6 @@ function drawEdgeLines(
   levels: Levels,
 ) {
   const { r, g, b } = hexToRgb(edgeColor);
-  // Strong music coupling
   const intensity =
     0.35 + levels.energy * 0.5 + levels.beat * 0.45 + levels.bass * 0.3;
   const thickness = 2.5 + levels.bass * 6 + levels.beat * 4;
@@ -280,7 +302,6 @@ function drawEdgeLines(
   ctx.save();
   ctx.globalCompositeOperation = "screen";
 
-  // Soft bloom bands
   let grad = ctx.createLinearGradient(0, 0, pad, 0);
   grad.addColorStop(0, `rgba(${r},${g},${b},${0.85 * intensity})`);
   grad.addColorStop(0.35, `rgba(${r},${g},${b},${0.3 * intensity})`);
@@ -296,22 +317,19 @@ function drawEdgeLines(
   ctx.fillRect(w - pad, 0, pad, h);
 
   grad = ctx.createLinearGradient(0, 0, 0, pad * 0.85);
-  grad.addColorStop(0, `rgba(${r},${g},${b},${0.6 * intensity})`);
-  grad.addColorStop(0.5, `rgba(${r},${g},${b},${0.2 * intensity})`);
+  grad.addColorStop(0, `rgba(${r},${g},${b},${0.55 * intensity})`);
   grad.addColorStop(1, "transparent");
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, pad);
 
   grad = ctx.createLinearGradient(0, h, 0, h - pad * 0.85);
-  grad.addColorStop(0, `rgba(${r},${g},${b},${0.6 * intensity})`);
-  grad.addColorStop(0.5, `rgba(${r},${g},${b},${0.2 * intensity})`);
+  grad.addColorStop(0, `rgba(${r},${g},${b},${0.55 * intensity})`);
   grad.addColorStop(1, "transparent");
   ctx.fillStyle = grad;
   ctx.fillRect(0, h - pad, w, pad);
 
-  // Hard edge strokes that thicken with the beat
   ctx.shadowColor = `rgba(${r},${g},${b},1)`;
-  ctx.shadowBlur = 20 + levels.energy * 32 + levels.beat * 20;
+  ctx.shadowBlur = 18 + levels.energy * 30 + levels.beat * 18;
   ctx.strokeStyle = `rgba(${r},${g},${b},${0.9 + levels.beat * 0.1})`;
   ctx.lineWidth = thickness;
   ctx.beginPath();
@@ -320,7 +338,6 @@ function drawEdgeLines(
   ctx.moveTo(w - 2, 0);
   ctx.lineTo(w - 2, h);
   ctx.stroke();
-
   ctx.lineWidth = thickness * 0.65;
   ctx.beginPath();
   ctx.moveTo(0, 2);
@@ -328,7 +345,6 @@ function drawEdgeLines(
   ctx.moveTo(0, h - 2);
   ctx.lineTo(w, h - 2);
   ctx.stroke();
-
   ctx.shadowBlur = 0;
   ctx.restore();
 }
@@ -343,163 +359,141 @@ function drawOrb(
   t: number,
   playing: boolean,
   colorIdx: number,
+  rings: RingParticle[],
 ) {
   const cx = w / 2;
   const cy = h / 2;
-  // Strong size pulse with bass + beat
-  const pulse = 1 + levels.bass * 0.28 + levels.beat * 0.22 + levels.energy * 0.08;
-  const r = Math.min(w, h) * 0.2 * pulse;
-
-  const spinBase = revolve && playing ? 1 : 0.2;
-  const spin = t * (0.4 + levels.energy * 1.2) * spinBase + levels.bass * 0.3;
+  const pulse = 1 + levels.bass * 0.26 + levels.beat * 0.2 + levels.energy * 0.08;
+  const r = Math.min(w, h) * 0.18 * pulse;
 
   if (style === "blackhole") {
-    drawBlackHole(ctx, cx, cy, r, spin, levels, revolve && playing);
+    drawParticleBlackHole(ctx, cx, cy, r, levels, t, revolve && playing, rings);
   } else if (style === "supernova") {
     drawSupernova(ctx, cx, cy, r, levels, t);
   } else if (style === "plasma") {
-    drawEnergyOrb(ctx, cx, cy, r, levels, t, "#40c8ff", "#2060ff", revolve && playing);
+    drawVolumetricOrb(ctx, cx, cy, r, levels, t, "#40d0ff", "#2060ff", revolve && playing);
   } else if (style === "lightning") {
     const col = LIGHTNING_COLORS[colorIdx % LIGHTNING_COLORS.length];
-    drawEnergyOrb(ctx, cx, cy, r, levels, t, col, "#ffffff", revolve && playing, true);
+    drawVolumetricOrb(ctx, cx, cy, r, levels, t, col, "#ffffff", revolve && playing, true);
   } else {
-    drawEnergyOrb(ctx, cx, cy, r, levels, t, "#ffc840", "#ff6a20", revolve && playing);
+    drawVolumetricOrb(ctx, cx, cy, r, levels, t, "#ffc840", "#ff6a20", revolve && playing);
   }
 }
 
 /**
- * Interstellar-style black hole:
- * event horizon + photon ring + accretion disk that tilts on
- * horizontal, vertical, and diagonal axes and pulses with audio.
+ * Particle accretion disk — matches the cyan ring / galaxy refs.
+ * Three orbital planes (horizontal, diagonal, vertical-ish) that
+ * spin and expand with the music.
  */
-function drawBlackHole(
+function drawParticleBlackHole(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
   r: number,
-  spin: number,
   levels: Levels,
+  t: number,
   multiAxis: boolean,
+  particles: RingParticle[],
 ) {
   ctx.save();
   ctx.translate(cx, cy);
 
-  // Outer gravitational glow — pulses
-  const outer = ctx.createRadialGradient(0, 0, r * 0.7, 0, 0, r * 3.6);
-  outer.addColorStop(0, `rgba(255, 150, 50, ${0.22 + levels.energy * 0.35 + levels.beat * 0.15})`);
-  outer.addColorStop(0.35, `rgba(255, 70, 20, ${0.12 + levels.mid * 0.15})`);
-  outer.addColorStop(0.7, `rgba(120, 30, 10, ${0.05 + levels.bass * 0.08})`);
+  // Soft outer glow
+  const outer = ctx.createRadialGradient(0, 0, r * 0.5, 0, 0, r * 3.8);
+  outer.addColorStop(0, `rgba(80, 200, 255, ${0.12 + levels.energy * 0.25 + levels.beat * 0.1})`);
+  outer.addColorStop(0.4, `rgba(40, 120, 255, ${0.06 + levels.mid * 0.1})`);
   outer.addColorStop(1, "transparent");
   ctx.fillStyle = outer;
   ctx.beginPath();
-  ctx.arc(0, 0, r * 3.6, 0, Math.PI * 2);
+  ctx.arc(0, 0, r * 3.8, 0, Math.PI * 2);
   ctx.fill();
 
-  // --- Multi-axis accretion rings ---
-  // Horizontal-ish (main disk)
-  const tiltH = multiAxis ? Math.sin(spin * 0.55) * 0.7 : 0.4;
-  const tiltV = multiAxis ? Math.cos(spin * 0.38) * 0.55 : 0.25;
-  const tiltD = multiAxis ? Math.sin(spin * 0.28 + 1.1) * 0.5 : 0.2;
+  // Plane tilt factors driven by time + audio
+  const spin = t * (0.55 + levels.energy * 1.1);
+  const tiltH = multiAxis ? 0.22 + Math.sin(spin * 0.45) * 0.28 : 0.32;
+  const tiltD = multiAxis ? 0.18 + Math.cos(spin * 0.32) * 0.25 : 0.15;
+  const tiltV = multiAxis ? 0.12 + Math.sin(spin * 0.28 + 1) * 0.2 : 0.1;
 
-  // Primary disk — horizontal / slight vertical blend
-  drawAccretionBand(ctx, r, spin * 0.95, 0.22 + Math.abs(tiltH) * 0.4 + Math.abs(tiltV) * 0.15, levels, 1);
+  const diskScale = 1 + levels.bass * 0.35 + levels.beat * 0.2;
+  const baseR = r * 2.4 * diskScale;
 
-  // Secondary disk — diagonal axis
-  if (multiAxis) {
-    drawAccretionBand(
-      ctx,
-      r,
-      spin * 0.55 + Math.PI / 4,
-      0.18 + Math.abs(tiltD) * 0.35,
-      levels,
-      0.55,
-    );
+  // Draw particles as additive points
+  ctx.globalCompositeOperation = "lighter";
+
+  for (const p of particles) {
+    // Orbital motion
+    const speedMul = multiAxis ? 1 : 0.35;
+    p.angle += 0.012 * p.speed * speedMul * (1 + levels.energy * 0.8);
+
+    const planeTilt =
+      p.plane === 0 ? tiltH : p.plane === 1 ? tiltD : tiltV;
+    const planeRot =
+      p.plane === 0
+        ? spin * 0.3
+        : p.plane === 1
+          ? spin * 0.22 + Math.PI / 4
+          : spin * 0.18 + Math.PI / 2.1;
+
+    const rad = baseR * p.radius;
+    // 3D-ish projection: rotate in plane then squash Y
+    const lx = Math.cos(p.angle) * rad;
+    const ly = Math.sin(p.angle) * rad * planeTilt;
+
+    const cosR = Math.cos(planeRot);
+    const sinR = Math.sin(planeRot);
+    const x = lx * cosR - ly * sinR;
+    const y = lx * sinR + ly * cosR;
+
+    // Brightness: denser/brighter near inner edge + beat flash
+    const inner = 1 - p.radius;
+    const bright =
+      p.alpha *
+      (0.35 + inner * 0.55 + levels.energy * 0.35 + levels.beat * 0.25);
+
+    // Cyan → white hot core of disk
+    const heat = Math.min(1, inner * 1.3 + levels.beat * 0.3);
+    const cr = Math.floor(120 + heat * 135);
+    const cg = Math.floor(200 + heat * 55);
+    const cb = 255;
+
+    const sz = p.size * (0.7 + levels.high * 0.5 + levels.beat * 0.3);
+
+    ctx.globalAlpha = Math.min(1, bright);
+    ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+    ctx.beginPath();
+    ctx.arc(x, y, sz * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Soft bloom on brighter particles
+    if (bright > 0.55) {
+      ctx.globalAlpha = bright * 0.25;
+      ctx.beginPath();
+      ctx.arc(x, y, sz * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
-  // Tertiary — more vertical
-  if (multiAxis) {
-    drawAccretionBand(
-      ctx,
-      r,
-      spin * 0.35 + Math.PI / 2.2,
-      0.12 + Math.abs(tiltV) * 0.4,
-      levels,
-      0.35,
-    );
-  }
-
-  // Photon ring
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 1.1, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(255, 220, 150, ${0.5 + levels.high * 0.4 + levels.beat * 0.2})`;
-  ctx.lineWidth = 2 + levels.high * 2.5 + levels.beat * 2;
-  ctx.shadowColor = "rgba(255, 160, 50, 1)";
-  ctx.shadowBlur = 14 + levels.energy * 16;
-  ctx.stroke();
-  ctx.shadowBlur = 0;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
 
   // Event horizon
-  const hole = ctx.createRadialGradient(-r * 0.12, -r * 0.08, 0, 0, 0, r);
+  const hole = ctx.createRadialGradient(-r * 0.1, -r * 0.08, 0, 0, 0, r);
   hole.addColorStop(0, "#000000");
-  hole.addColorStop(0.72, "#000000");
-  hole.addColorStop(0.9, "#0a0503");
-  hole.addColorStop(1, "#1a0c06");
+  hole.addColorStop(0.75, "#000000");
+  hole.addColorStop(0.92, "#050a12");
+  hole.addColorStop(1, "#0a1520");
   ctx.fillStyle = hole;
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
   ctx.fill();
 
-  // Soft rim light
+  // Photon ring
   ctx.beginPath();
-  ctx.arc(0, 0, r * 0.97, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(255, 120, 40, ${0.2 + levels.energy * 0.2 + levels.beat * 0.15})`;
-  ctx.lineWidth = r * 0.07;
-  ctx.stroke();
-
-  ctx.restore();
-}
-
-function drawAccretionBand(
-  ctx: CanvasRenderingContext2D,
-  r: number,
-  rotation: number,
-  scaleY: number,
-  levels: Levels,
-  alphaMul: number,
-) {
-  ctx.save();
-  ctx.rotate(rotation);
-  ctx.scale(1, Math.max(0.08, scaleY));
-
-  for (let band = 0; band < 3; band++) {
-    const bandR = r * (1.55 + band * 0.3);
-    const lw = r * (0.16 - band * 0.03) * (1 + levels.bass * 0.5 + levels.beat * 0.25);
-    const a = (0.65 - band * 0.14 + levels.energy * 0.25) * alphaMul;
-
-    const g = ctx.createLinearGradient(-bandR * 1.3, 0, bandR * 1.3, 0);
-    g.addColorStop(0, "transparent");
-    g.addColorStop(0.12, `rgba(255, 110, 30, ${a * 0.5})`);
-    g.addColorStop(0.32, `rgba(255, 170, 60, ${a})`);
-    g.addColorStop(0.5, `rgba(255, 245, 190, ${a * 1.15})`);
-    g.addColorStop(0.68, `rgba(255, 100, 30, ${a})`);
-    g.addColorStop(0.88, `rgba(200, 50, 15, ${a * 0.5})`);
-    g.addColorStop(1, "transparent");
-
-    ctx.strokeStyle = g;
-    ctx.lineWidth = lw;
-    ctx.shadowColor = "rgba(255, 140, 40, 0.9)";
-    ctx.shadowBlur = 12 + levels.energy * 16 + levels.beat * 10;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, bandR, bandR, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  // Hot inner edge
-  ctx.lineWidth = r * (0.05 + levels.beat * 0.06);
-  ctx.strokeStyle = `rgba(255, 245, 210, ${(0.7 + levels.beat * 0.3) * alphaMul})`;
-  ctx.shadowBlur = 14 + levels.beat * 12;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, r * 1.32, r * 1.32, 0, 0, Math.PI * 2);
+  ctx.arc(0, 0, r * 1.06, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(180, 230, 255, ${0.45 + levels.high * 0.4 + levels.beat * 0.2})`;
+  ctx.lineWidth = 1.5 + levels.high * 2 + levels.beat * 1.5;
+  ctx.shadowColor = "rgba(100, 200, 255, 0.9)";
+  ctx.shadowBlur = 12 + levels.energy * 14;
   ctx.stroke();
   ctx.shadowBlur = 0;
 
@@ -517,14 +511,12 @@ function drawSupernova(
   ctx.save();
   ctx.translate(cx, cy);
 
-  // Expanding shells — size reacts to energy/beat
   for (let i = 5; i >= 0; i--) {
-    const shellR = r * (1.1 + i * 0.4) * (1 + levels.energy * 0.25 + levels.beat * 0.12);
-    const alpha = Math.max(0, 0.16 - i * 0.022) + levels.mid * 0.06 + levels.beat * 0.04;
-    const g = ctx.createRadialGradient(0, 0, shellR * 0.5, 0, 0, shellR);
+    const shellR = r * (1.1 + i * 0.42) * (1 + levels.energy * 0.28 + levels.beat * 0.12);
+    const alpha = Math.max(0, 0.15 - i * 0.02) + levels.mid * 0.05 + levels.beat * 0.04;
+    const g = ctx.createRadialGradient(0, 0, shellR * 0.45, 0, 0, shellR);
     g.addColorStop(0, `rgba(255, 120, 40, ${alpha})`);
-    g.addColorStop(0.45, `rgba(255, 50, 15, ${alpha * 0.7})`);
-    g.addColorStop(0.75, `rgba(120, 20, 40, ${alpha * 0.35})`);
+    g.addColorStop(0.5, `rgba(255, 50, 15, ${alpha * 0.65})`);
     g.addColorStop(1, "transparent");
     ctx.fillStyle = g;
     ctx.beginPath();
@@ -532,40 +524,37 @@ function drawSupernova(
     ctx.fill();
   }
 
-  // Bright pulsing core
   const core = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
   core.addColorStop(0, "#ffffff");
-  core.addColorStop(0.15, "rgba(255, 245, 200, 0.95)");
-  core.addColorStop(0.35, `rgba(255, 190, 70, ${0.9 + levels.beat * 0.1})`);
-  core.addColorStop(0.55, "rgba(255, 80, 25, 0.85)");
-  core.addColorStop(0.8, "rgba(160, 25, 10, 0.55)");
-  core.addColorStop(1, "rgba(40, 5, 5, 0.15)");
+  core.addColorStop(0.2, "rgba(255, 240, 180, 0.95)");
+  core.addColorStop(0.45, `rgba(255, 160, 50, ${0.9 + levels.beat * 0.1})`);
+  core.addColorStop(0.75, "rgba(200, 40, 15, 0.7)");
+  core.addColorStop(1, "rgba(40, 5, 5, 0.2)");
   ctx.fillStyle = core;
   ctx.shadowColor = "rgba(255, 100, 30, 1)";
-  ctx.shadowBlur = 30 + levels.energy * 45 + levels.beat * 25;
+  ctx.shadowBlur = 28 + levels.energy * 40 + levels.beat * 22;
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
   ctx.fill();
   ctx.shadowBlur = 0;
 
-  // Filaments
-  ctx.globalAlpha = 0.4 + levels.high * 0.4 + levels.beat * 0.15;
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2 + t * (0.4 + levels.energy * 0.6);
-    const len = r * (1.25 + levels.energy * 0.8 + levels.beat * 0.3 + (i % 3) * 0.12);
+  ctx.globalAlpha = 0.4 + levels.high * 0.4;
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2 + t * (0.4 + levels.energy * 0.5);
+    const len = r * (1.3 + levels.energy * 0.7 + levels.beat * 0.25);
     const grad = ctx.createLinearGradient(
-      Math.cos(a) * r * 0.5,
-      Math.sin(a) * r * 0.5,
+      Math.cos(a) * r * 0.4,
+      Math.sin(a) * r * 0.4,
       Math.cos(a) * len,
       Math.sin(a) * len,
     );
-    grad.addColorStop(0, "rgba(255, 220, 120, 0.95)");
-    grad.addColorStop(0.5, "rgba(255, 80, 30, 0.65)");
+    grad.addColorStop(0, "rgba(255, 220, 120, 0.9)");
+    grad.addColorStop(0.5, "rgba(255, 80, 30, 0.55)");
     grad.addColorStop(1, "transparent");
     ctx.strokeStyle = grad;
-    ctx.lineWidth = 1.5 + levels.bass * 2.5;
+    ctx.lineWidth = 1.4 + levels.bass * 2;
     ctx.beginPath();
-    ctx.moveTo(Math.cos(a) * r * 0.5, Math.sin(a) * r * 0.5);
+    ctx.moveTo(Math.cos(a) * r * 0.45, Math.sin(a) * r * 0.45);
     ctx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
     ctx.stroke();
   }
@@ -574,10 +563,10 @@ function drawSupernova(
 }
 
 /**
- * Single energy orb (plasma / lightning colour variant / glow).
- * Looks like one sphere from your multi-orb reference grid — not the whole grid.
+ * Volumetric energy orb — soft particle cloud body like the green/red
+ * organic forms in the multi-window ref, not a flat glass ball.
  */
-function drawEnergyOrb(
+function drawVolumetricOrb(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
@@ -594,79 +583,92 @@ function drawEnergyOrb(
 
   const { r: pr, g: pg, b: pb } = hexToRgb(primary);
 
-  // Outer aura — pulses hard
-  const auraR = r * (1.7 + levels.energy * 0.4 + levels.beat * 0.25);
-  const aura = ctx.createRadialGradient(0, 0, r * 0.3, 0, 0, auraR);
-  aura.addColorStop(0, `rgba(${pr},${pg},${pb},${0.45 + levels.energy * 0.3 + levels.beat * 0.2})`);
-  aura.addColorStop(0.45, `rgba(${pr},${pg},${pb},${0.15 + levels.mid * 0.12})`);
+  // Outer volume
+  const auraR = r * (1.85 + levels.energy * 0.45 + levels.beat * 0.3);
+  const aura = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, auraR);
+  aura.addColorStop(0, `rgba(${pr},${pg},${pb},${0.5 + levels.energy * 0.3 + levels.beat * 0.2})`);
+  aura.addColorStop(0.4, `rgba(${pr},${pg},${pb},${0.18 + levels.mid * 0.12})`);
   aura.addColorStop(1, "transparent");
   ctx.fillStyle = aura;
   ctx.beginPath();
   ctx.arc(0, 0, auraR, 0, Math.PI * 2);
   ctx.fill();
 
-  // Glass sphere body
-  const body = ctx.createRadialGradient(-r * 0.25, -r * 0.3, 0, 0, 0, r * 1.05);
-  body.addColorStop(0, highlight);
-  body.addColorStop(0.22, `rgba(${pr},${pg},${pb},0.95)`);
-  body.addColorStop(0.55, `rgba(${Math.floor(pr * 0.4)},${Math.floor(pg * 0.35)},${Math.floor(pb * 0.5)},0.9)`);
-  body.addColorStop(0.85, `rgba(${Math.floor(pr * 0.15)},${Math.floor(pg * 0.1)},${Math.floor(pb * 0.2)},0.7)`);
-  body.addColorStop(1, "rgba(5,2,10,0.3)");
-  ctx.fillStyle = body;
-  ctx.shadowColor = `rgba(${pr},${pg},${pb},0.95)`;
-  ctx.shadowBlur = 22 + levels.energy * 40 + levels.beat * 20;
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
+  // Dense particle cloud forming the orb body
+  ctx.globalCompositeOperation = "lighter";
+  const count = 220;
+  for (let i = 0; i < count; i++) {
+    // Spherical distribution (rejection-ish via radius bias)
+    const u = Math.random();
+    const v = Math.random();
+    const theta = u * Math.PI * 2;
+    const phi = Math.acos(2 * v - 1);
+    const rad = r * Math.cbrt(Math.random()) * (0.85 + levels.bass * 0.15);
 
-  // Specular highlight
-  ctx.globalAlpha = 0.55;
-  const hi = ctx.createRadialGradient(-r * 0.3, -r * 0.35, 0, -r * 0.3, -r * 0.35, r * 0.45);
-  hi.addColorStop(0, "rgba(255,255,255,0.85)");
-  hi.addColorStop(1, "transparent");
-  ctx.fillStyle = hi;
-  ctx.beginPath();
-  ctx.arc(-r * 0.28, -r * 0.32, r * 0.4, 0, Math.PI * 2);
-  ctx.fill();
+    // Slow swirl
+    const swirl = t * (0.6 + levels.energy * 0.8) * (revolve ? 1 : 0.25);
+    const x = rad * Math.sin(phi) * Math.cos(theta + swirl);
+    const y = rad * Math.sin(phi) * Math.sin(theta + swirl) * 0.85;
+    // Depth shade
+    const z = rad * Math.cos(phi);
+    const depth = (z / r + 1) * 0.5;
+
+    const alpha = (0.15 + depth * 0.55) * (0.5 + levels.energy * 0.5 + levels.beat * 0.25);
+    const sz = (0.8 + depth * 1.4) * (1 + levels.high * 0.4);
+
+    ctx.globalAlpha = Math.min(1, alpha);
+    ctx.fillStyle = depth > 0.65 ? highlight : primary;
+    ctx.beginPath();
+    ctx.arc(x, y, sz * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
 
-  // Orbiting energy arcs
+  // Core glow
+  const core = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 0.55);
+  core.addColorStop(0, `rgba(255,255,255,${0.55 + levels.beat * 0.3})`);
+  core.addColorStop(0.4, `rgba(${pr},${pg},${pb},0.45)`);
+  core.addColorStop(1, "transparent");
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.55, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Orbiting arcs when revolving
   if (revolve) {
-    ctx.globalAlpha = 0.55 + levels.high * 0.4;
-    for (let i = 0; i < 8; i++) {
-      const a0 = (i / 8) * Math.PI * 2 + t * (1.2 + levels.energy);
-      const rr = r * (0.6 + (i % 3) * 0.12);
+    ctx.globalAlpha = 0.5 + levels.high * 0.4;
+    for (let i = 0; i < 6; i++) {
+      const a0 = (i / 6) * Math.PI * 2 + t * (1.1 + levels.energy);
+      const rr = r * (0.7 + (i % 3) * 0.1);
       ctx.strokeStyle = i % 2 === 0 ? highlight : primary;
-      ctx.lineWidth = 1.2 + levels.mid * 2.5 + levels.beat * 1.5;
+      ctx.lineWidth = 1.2 + levels.mid * 2 + levels.beat;
       ctx.shadowColor = `rgba(${pr},${pg},${pb},0.8)`;
       ctx.shadowBlur = 8;
       ctx.beginPath();
-      ctx.arc(0, 0, rr, a0, a0 + 0.7 + levels.bass * 0.5);
+      ctx.arc(0, 0, rr, a0, a0 + 0.65 + levels.bass * 0.4);
       ctx.stroke();
     }
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
   }
 
-  // Lightning bolts on energy (lightning style only)
-  if (bolts && (levels.beat > 0.3 || levels.energy > 0.4)) {
-    ctx.globalAlpha = 0.7 + levels.beat * 0.3;
-    ctx.lineWidth = 1.5 + levels.high * 2;
-    ctx.lineJoin = "round";
-    ctx.shadowColor = "rgba(220, 240, 255, 0.9)";
+  if (bolts && (levels.beat > 0.28 || levels.energy > 0.4)) {
+    ctx.globalAlpha = 0.65 + levels.beat * 0.3;
+    ctx.lineWidth = 1.4 + levels.high * 2;
+    ctx.shadowColor = "rgba(220,240,255,0.9)";
     ctx.shadowBlur = 10;
     for (let i = 0; i < 5; i++) {
       const a = (i / 5) * Math.PI * 2 + t * 2.5 + levels.beat;
       ctx.strokeStyle = i % 2 === 0 ? "#e8f7ff" : primary;
       ctx.beginPath();
-      let x = Math.cos(a) * r * 0.12;
-      let y = Math.sin(a) * r * 0.12;
+      let x = Math.cos(a) * r * 0.1;
+      let y = Math.sin(a) * r * 0.1;
       ctx.moveTo(x, y);
       for (let s = 0; s < 5; s++) {
-        const jitter = Math.sin(t * 18 + i * 5 + s * 2) * r * 0.1;
-        x += Math.cos(a + Math.sin(t * 6 + s) * 0.5) * (r * 0.22);
-        y += Math.sin(a + Math.cos(t * 6 + s) * 0.5) * (r * 0.22);
+        const jitter = Math.sin(t * 16 + i * 5 + s * 2) * r * 0.1;
+        x += Math.cos(a + Math.sin(t * 5 + s) * 0.5) * (r * 0.2);
+        y += Math.sin(a + Math.cos(t * 5 + s) * 0.5) * (r * 0.2);
         ctx.lineTo(x + jitter, y - jitter);
       }
       ctx.stroke();
