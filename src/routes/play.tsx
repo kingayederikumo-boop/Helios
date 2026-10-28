@@ -87,14 +87,14 @@ function VisualizerScreen() {
         orbStyle={orbStyle}
         revolve={revolve}
         edgeColor={edgeColor}
+        edgeGlow={edgeGlow}
       />
 
       {edgeGlow && (
         <div
-          className="pointer-events-none absolute inset-0 rounded-[1.5rem]"
+          className="pointer-events-none absolute inset-0"
           style={{
-            boxShadow: `inset 0 0 50px ${edgeColor}66, 0 0 40px ${edgeColor}44`,
-            opacity: 0.85,
+            boxShadow: `inset 0 0 80px ${edgeColor}99, inset 0 0 140px ${edgeColor}55, 0 0 60px ${edgeColor}66`,
           }}
         />
       )}
