@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef } from "react";
 import type { Engine } from "@/lib/audio/engine";
+import { VISUALIZER_IMAGES, type VisualizerImageKey } from "@/lib/visualizer-images";
 
 export type VisualizerMode = "orb" | "wave";
 export type OrbStyle = "blackhole" | "supernova" | "plasma" | "lightning" | "glow";
@@ -61,6 +62,17 @@ function makeDust(w: number, h: number, count: number): Dust[] {
   return out;
 }
 
+function loadImages(): Record<VisualizerImageKey, HTMLImageElement> {
+  const map = {} as Record<VisualizerImageKey, HTMLImageElement>;
+  (Object.keys(VISUALIZER_IMAGES) as VisualizerImageKey[]).forEach((key) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = VISUALIZER_IMAGES[key];
+    map[key] = img;
+  });
+  return map;
+}
+
 export const VisualizerCanvas = memo(function VisualizerCanvas({
   engine,
   mode,
@@ -78,6 +90,7 @@ export const VisualizerCanvas = memo(function VisualizerCanvas({
   const edgeGlowRef = useRef(edgeGlow);
   const dustRef = useRef<Dust[]>([]);
   const sizeRef = useRef({ w: 0, h: 0 });
+  const imagesRef = useRef<Record<VisualizerImageKey, HTMLImageElement> | null>(null);
 
   engineRef.current = engine;
   modeRef.current = mode;
@@ -91,6 +104,8 @@ export const VisualizerCanvas = memo(function VisualizerCanvas({
     if (!canvas) return;
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
+
+    if (!imagesRef.current) imagesRef.current = loadImages();
 
     let frame = 0;
 
@@ -130,7 +145,17 @@ export const VisualizerCanvas = memo(function VisualizerCanvas({
       if (modeRef.current === "wave") {
         drawWave(ctx, w, h, levels, t);
       } else {
-        drawOrb(ctx, w, h, style, revolveRef.current, levels, t, playing);
+        drawOrbFromImage(
+          ctx,
+          w,
+          h,
+          style,
+          revolveRef.current,
+          levels,
+          t,
+          playing,
+          imagesRef.current,
+        );
       }
 
       if (edgeGlowRef.current) {
@@ -186,7 +211,6 @@ function paintBackground(
 
   ctx.save();
   ctx.globalCompositeOperation = "screen";
-
   ctx.globalAlpha = 0.28 + levels.energy * 0.22 + levels.beat * 0.1;
   const n1x = cx + Math.sin(t * 0.12) * w * 0.08;
   const n1y = cy + Math.cos(t * 0.09) * h * 0.06;
@@ -210,16 +234,6 @@ function paintBackground(
   }
   ctx.fillStyle = n1;
   ctx.fillRect(0, 0, w, h);
-
-  ctx.globalAlpha = 0.14 + levels.mid * 0.14;
-  const n2x = cx - w * 0.22 + Math.cos(t * 0.08) * 20;
-  const n2y = cy + h * 0.18;
-  const n2 = ctx.createRadialGradient(n2x, n2y, 0, n2x, n2y, maxR * 0.4);
-  n2.addColorStop(0, style === "plasma" ? "rgba(0, 220, 255, 0.4)" : "rgba(255, 60, 100, 0.35)");
-  n2.addColorStop(1, "transparent");
-  ctx.fillStyle = n2;
-  ctx.fillRect(0, 0, w, h);
-
   ctx.restore();
 }
 
@@ -236,7 +250,6 @@ function drawStarDust(
 
   ctx.save();
   for (const p of dust) {
-    // Slow drift + depth parallax
     p.x += (0.15 + p.z * 0.4) * drift;
     p.y += Math.sin(t * 0.4 + p.x * 0.01) * 0.08 * p.z;
     if (p.x > w + 4) p.x = -4;
@@ -246,7 +259,6 @@ function drawStarDust(
     const alpha = Math.min(1, p.a * pulse * (0.5 + p.z));
     const size = p.s * (0.6 + p.z * 0.8) * (1 + levels.high * 0.35);
 
-    // Soft glow core
     ctx.globalAlpha = alpha * 0.35;
     const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size * 3.5);
     g.addColorStop(0, "rgba(255, 240, 210, 0.9)");
@@ -276,17 +288,11 @@ function drawEdgeLines(
   const { r, g, b } = hexToRgb(edgeColor);
   const intensity = 0.45 + levels.energy * 0.4 + levels.beat * 0.35 + levels.bass * 0.2;
   const thickness = 3 + levels.bass * 5 + levels.beat * 3;
+  const pad = 28 + levels.energy * 18;
 
   ctx.save();
   ctx.globalCompositeOperation = "screen";
 
-  // Outer soft bloom along all edges
-  const pad = 28 + levels.energy * 18;
-  const bloom = ctx.createLinearGradient(0, 0, pad, 0);
-  bloom.addColorStop(0, `rgba(${r},${g},${b},${0.55 * intensity})`);
-  bloom.addColorStop(1, "transparent");
-
-  // Left
   let grad = ctx.createLinearGradient(0, 0, pad, 0);
   grad.addColorStop(0, `rgba(${r},${g},${b},${0.75 * intensity})`);
   grad.addColorStop(0.4, `rgba(${r},${g},${b},${0.25 * intensity})`);
@@ -294,7 +300,6 @@ function drawEdgeLines(
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, pad, h);
 
-  // Right
   grad = ctx.createLinearGradient(w, 0, w - pad, 0);
   grad.addColorStop(0, `rgba(${r},${g},${b},${0.75 * intensity})`);
   grad.addColorStop(0.4, `rgba(${r},${g},${b},${0.25 * intensity})`);
@@ -302,7 +307,6 @@ function drawEdgeLines(
   ctx.fillStyle = grad;
   ctx.fillRect(w - pad, 0, pad, h);
 
-  // Top
   grad = ctx.createLinearGradient(0, 0, 0, pad);
   grad.addColorStop(0, `rgba(${r},${g},${b},${0.55 * intensity})`);
   grad.addColorStop(0.5, `rgba(${r},${g},${b},${0.18 * intensity})`);
@@ -310,7 +314,6 @@ function drawEdgeLines(
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, pad);
 
-  // Bottom
   grad = ctx.createLinearGradient(0, h, 0, h - pad);
   grad.addColorStop(0, `rgba(${r},${g},${b},${0.55 * intensity})`);
   grad.addColorStop(0.5, `rgba(${r},${g},${b},${0.18 * intensity})`);
@@ -318,7 +321,6 @@ function drawEdgeLines(
   ctx.fillStyle = grad;
   ctx.fillRect(0, h - pad, w, pad);
 
-  // Hard bright edge strokes
   ctx.shadowColor = `rgba(${r},${g},${b},0.95)`;
   ctx.shadowBlur = 18 + levels.energy * 28 + levels.beat * 16;
   ctx.strokeStyle = `rgba(${r},${g},${b},${0.85 + levels.beat * 0.15})`;
@@ -342,7 +344,7 @@ function drawEdgeLines(
   ctx.restore();
 }
 
-function drawOrb(
+function drawOrbFromImage(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
@@ -351,356 +353,154 @@ function drawOrb(
   levels: Levels,
   t: number,
   playing: boolean,
+  images: Record<VisualizerImageKey, HTMLImageElement> | null,
 ) {
   const cx = w / 2;
   const cy = h / 2;
-  const baseR = Math.min(w, h) * 0.2;
-  const pulse = 1 + levels.bass * 0.22 + levels.beat * 0.16;
+  const baseR = Math.min(w, h) * 0.28;
+  const pulse = 1 + levels.bass * 0.2 + levels.beat * 0.14;
   const r = baseR * pulse;
 
   const spin =
     revolve && playing
-      ? t * (0.55 + levels.energy * 1.6)
-      : t * (0.12 + levels.energy * 0.15);
+      ? t * (0.5 + levels.energy * 1.4)
+      : t * (0.1 + levels.energy * 0.12);
 
-  if (style === "blackhole") drawBlackHole(ctx, cx, cy, r, spin, levels, revolve && playing);
-  else if (style === "supernova") drawSupernova(ctx, cx, cy, r, levels, t);
-  else if (style === "plasma") drawPlasma(ctx, cx, cy, r, levels, t);
-  else if (style === "lightning") drawLightningOrb(ctx, cx, cy, r, levels, t);
-  else drawGlowOrb(ctx, cx, cy, r, levels, t);
-}
+  const imgKey = style as VisualizerImageKey;
+  const img = images?.[imgKey];
+  const ready = img && img.complete && img.naturalWidth > 0;
 
-function drawBlackHole(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  r: number,
-  spin: number,
-  levels: Levels,
-  multiAxis: boolean,
-) {
-  const tiltH = multiAxis ? Math.sin(spin * 0.55) * 0.65 : 0.35;
-  const tiltV = multiAxis ? Math.cos(spin * 0.38) * 0.5 : 0.2;
-  const tiltD = multiAxis ? Math.sin(spin * 0.28 + 1.2) * 0.4 : 0.15;
-  const scaleY = 0.28 + Math.abs(tiltH) * 0.35 + Math.abs(tiltV) * 0.2 + Math.abs(tiltD) * 0.15;
-
+  // Soft outer glow matching style
   ctx.save();
   ctx.translate(cx, cy);
-
-  const outer = ctx.createRadialGradient(0, 0, r * 0.8, 0, 0, r * 3.4);
-  outer.addColorStop(0, `rgba(255, 150, 50, ${0.28 + levels.energy * 0.32})`);
-  outer.addColorStop(0.35, `rgba(255, 70, 25, ${0.14 + levels.mid * 0.14})`);
-  outer.addColorStop(0.7, `rgba(120, 30, 10, ${0.06 + levels.bass * 0.08})`);
-  outer.addColorStop(1, "transparent");
-  ctx.fillStyle = outer;
+  const aura = ctx.createRadialGradient(0, 0, r * 0.5, 0, 0, r * 2.2);
+  if (style === "plasma") {
+    aura.addColorStop(0, `rgba(80, 200, 255, ${0.35 + levels.energy * 0.3})`);
+    aura.addColorStop(0.5, `rgba(30, 100, 255, ${0.12 + levels.mid * 0.1})`);
+  } else if (style === "lightning") {
+    aura.addColorStop(0, `rgba(180, 80, 255, ${0.35 + levels.energy * 0.3})`);
+    aura.addColorStop(0.5, `rgba(100, 30, 180, ${0.12 + levels.mid * 0.1})`);
+  } else if (style === "glow") {
+    aura.addColorStop(0, `rgba(255, 200, 80, ${0.4 + levels.energy * 0.3})`);
+    aura.addColorStop(0.5, `rgba(255, 120, 30, ${0.14 + levels.mid * 0.1})`);
+  } else {
+    aura.addColorStop(0, `rgba(255, 120, 40, ${0.35 + levels.energy * 0.3})`);
+    aura.addColorStop(0.5, `rgba(200, 50, 20, ${0.12 + levels.mid * 0.1})`);
+  }
+  aura.addColorStop(1, "transparent");
+  ctx.fillStyle = aura;
   ctx.beginPath();
-  ctx.arc(0, 0, r * 3.4, 0, Math.PI * 2);
+  ctx.arc(0, 0, r * 2.2, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.save();
-  ctx.rotate(spin * 0.85);
-  ctx.scale(1, scaleY);
-
-  for (let band = 0; band < 3; band++) {
-    const bandR = r * (1.65 + band * 0.28);
-    const lw = r * (0.16 - band * 0.03) * (1 + levels.bass * 0.4);
-    const g = ctx.createLinearGradient(-bandR * 1.3, 0, bandR * 1.3, 0);
-    const a = 0.6 - band * 0.12 + levels.energy * 0.22;
-    g.addColorStop(0, "transparent");
-    g.addColorStop(0.15, `rgba(255, 120, 30, ${a * 0.55})`);
-    g.addColorStop(0.35, `rgba(255, 180, 70, ${a})`);
-    g.addColorStop(0.5, `rgba(255, 240, 180, ${a * 1.15})`);
-    g.addColorStop(0.65, `rgba(255, 100, 30, ${a})`);
-    g.addColorStop(0.85, `rgba(200, 50, 15, ${a * 0.55})`);
-    g.addColorStop(1, "transparent");
-    ctx.strokeStyle = g;
-    ctx.lineWidth = lw;
-    ctx.shadowColor = "rgba(255, 140, 40, 0.7)";
-    ctx.shadowBlur = 10 + levels.energy * 14;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, bandR, bandR, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  ctx.lineWidth = r * (0.06 + levels.beat * 0.05);
-  ctx.strokeStyle = `rgba(255, 245, 210, ${0.75 + levels.beat * 0.25})`;
-  ctx.shadowColor = "rgba(255, 180, 60, 0.95)";
-  ctx.shadowBlur = 16 + levels.energy * 20;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, r * 1.38, r * 1.38, 0, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-  ctx.restore();
-
-  if (multiAxis) {
+  // Draw the reference image as the orb body
+  if (ready && img) {
     ctx.save();
-    ctx.rotate(spin * 0.5 + Math.PI / 5);
-    ctx.scale(1, 0.22 + Math.abs(tiltD) * 0.25);
-    ctx.globalAlpha = 0.4 + levels.mid * 0.25;
-    const g2 = ctx.createLinearGradient(-r * 2, 0, r * 2, 0);
-    g2.addColorStop(0, "transparent");
-    g2.addColorStop(0.3, "rgba(255, 90, 20, 0.7)");
-    g2.addColorStop(0.5, "rgba(255, 200, 100, 0.9)");
-    g2.addColorStop(0.7, "rgba(255, 80, 20, 0.7)");
-    g2.addColorStop(1, "transparent");
-    ctx.strokeStyle = g2;
-    ctx.lineWidth = r * 0.12;
-    ctx.shadowColor = "rgba(255, 120, 40, 0.8)";
-    ctx.shadowBlur = 12;
+    // Multi-axis tilt for blackhole when revolving
+    if (style === "blackhole" && revolve && playing) {
+      const tilt = Math.sin(spin * 0.4) * 0.25;
+      ctx.rotate(spin * 0.35);
+      ctx.transform(1, tilt * 0.3, 0, 0.85 + Math.abs(tilt) * 0.15, 0, 0);
+    } else if (revolve && playing) {
+      ctx.rotate(spin * 0.25);
+    }
+
+    // Circular clip so it reads as an orb
     ctx.beginPath();
-    ctx.ellipse(0, 0, r * 1.85, r * 1.85, 0, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.clip();
+
+    // Cover the circle with the image (object-fit: cover)
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+    const scale = Math.max((r * 2) / iw, (r * 2) / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+
+    // Subtle vignette on top of image
+    const vig = ctx.createRadialGradient(0, 0, r * 0.45, 0, 0, r);
+    vig.addColorStop(0, "transparent");
+    vig.addColorStop(0.75, "transparent");
+    vig.addColorStop(1, "rgba(0,0,0,0.55)");
+    ctx.fillStyle = vig;
+    ctx.fillRect(-r, -r, r * 2, r * 2);
     ctx.restore();
-  }
 
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 1.08, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(255, 210, 140, ${0.5 + levels.high * 0.4})`;
-  ctx.lineWidth = 2 + levels.high * 2.5;
-  ctx.shadowColor = "rgba(255, 160, 60, 1)";
-  ctx.shadowBlur = 12;
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  const hole = ctx.createRadialGradient(-r * 0.15, -r * 0.1, 0, 0, 0, r);
-  hole.addColorStop(0, "#000000");
-  hole.addColorStop(0.75, "#000000");
-  hole.addColorStop(0.9, "#0a0503");
-  hole.addColorStop(1, "#1a0c06");
-  ctx.fillStyle = hole;
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 0.97, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(255, 120, 40, ${0.18 + levels.energy * 0.18})`;
-  ctx.lineWidth = r * 0.07;
-  ctx.stroke();
-
-  ctx.restore();
-}
-
-function drawSupernova(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  r: number,
-  levels: Levels,
-  t: number,
-) {
-  ctx.save();
-  ctx.translate(cx, cy);
-
-  for (let i = 5; i >= 0; i--) {
-    const shellR = r * (1.15 + i * 0.38) * (1 + levels.energy * 0.2 + levels.beat * 0.08);
-    const alpha = Math.max(0, 0.16 - i * 0.02) + levels.mid * 0.06;
-    const g = ctx.createRadialGradient(0, 0, shellR * 0.55, 0, 0, shellR);
-    g.addColorStop(0, `rgba(255, 120, 40, ${alpha})`);
-    g.addColorStop(0.45, `rgba(255, 50, 15, ${alpha * 0.7})`);
-    g.addColorStop(0.75, `rgba(120, 20, 40, ${alpha * 0.35})`);
-    g.addColorStop(1, "transparent");
+    // Bright rim
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.98, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,255,255,${0.15 + levels.high * 0.25})`;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  } else {
+    // Fallback while loading
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+    g.addColorStop(0, "#fff6e0");
+    g.addColorStop(0.4, "#ff8a30");
+    g.addColorStop(1, "#1a0805");
     ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.arc(0, 0, shellR, 0, Math.PI * 2);
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  const core = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 1.05);
-  core.addColorStop(0, "#ffffff");
-  core.addColorStop(0.15, "rgba(255, 245, 200, 0.95)");
-  core.addColorStop(0.35, `rgba(255, 190, 70, ${0.9 + levels.beat * 0.1})`);
-  core.addColorStop(0.55, "rgba(255, 80, 25, 0.85)");
-  core.addColorStop(0.8, "rgba(160, 25, 10, 0.55)");
-  core.addColorStop(1, "rgba(40, 5, 5, 0.15)");
-  ctx.fillStyle = core;
-  ctx.shadowColor = "rgba(255, 100, 30, 1)";
-  ctx.shadowBlur = 36 + levels.energy * 45;
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
+  // Extra accretion rings for blackhole (multi-axis)
+  if (style === "blackhole") {
+    const multi = revolve && playing;
+    const tiltH = multi ? Math.sin(spin * 0.55) * 0.55 : 0.3;
+    const scaleY = 0.3 + Math.abs(tiltH) * 0.35;
 
-  ctx.globalAlpha = 0.45 + levels.high * 0.4;
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2 + t * (0.35 + levels.energy * 0.5);
-    const len = r * (1.2 + levels.energy * 0.7 + (i % 3) * 0.15);
-    const grad = ctx.createLinearGradient(
-      Math.cos(a) * r * 0.5,
-      Math.sin(a) * r * 0.5,
-      Math.cos(a) * len,
-      Math.sin(a) * len,
-    );
-    grad.addColorStop(0, "rgba(255, 220, 120, 0.95)");
-    grad.addColorStop(0.5, "rgba(255, 80, 30, 0.65)");
-    grad.addColorStop(1, "transparent");
-    ctx.strokeStyle = grad;
-    ctx.lineWidth = 1.5 + levels.bass * 2;
-    ctx.beginPath();
-    ctx.moveTo(Math.cos(a) * r * 0.55, Math.sin(a) * r * 0.55);
-    ctx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
-    ctx.stroke();
-  }
-
-  ctx.restore();
-}
-
-function drawPlasma(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  r: number,
-  levels: Levels,
-  t: number,
-) {
-  ctx.save();
-  ctx.translate(cx, cy);
-
-  const aura = ctx.createRadialGradient(0, 0, r * 0.4, 0, 0, r * 1.9);
-  aura.addColorStop(0, `rgba(100, 220, 255, ${0.4 + levels.energy * 0.3})`);
-  aura.addColorStop(0.5, `rgba(30, 100, 255, ${0.18 + levels.mid * 0.12})`);
-  aura.addColorStop(1, "transparent");
-  ctx.fillStyle = aura;
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 1.9, 0, Math.PI * 2);
-  ctx.fill();
-
-  const g = ctx.createRadialGradient(-r * 0.2, -r * 0.25, 0, 0, 0, r * 1.15);
-  g.addColorStop(0, "#f0ffff");
-  g.addColorStop(0.25, `rgba(100, 220, 255, ${0.9 + levels.beat * 0.1})`);
-  g.addColorStop(0.55, "rgba(40, 120, 255, 0.85)");
-  g.addColorStop(0.85, "rgba(15, 40, 120, 0.6)");
-  g.addColorStop(1, "rgba(5, 10, 40, 0.2)");
-  ctx.fillStyle = g;
-  ctx.shadowColor = "rgba(60, 180, 255, 0.95)";
-  ctx.shadowBlur = 28 + levels.energy * 35;
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 1.05, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-
-  ctx.globalAlpha = 0.6 + levels.high * 0.4;
-  for (let i = 0; i < 10; i++) {
-    const a0 = (i / 10) * Math.PI * 2 + t * (1.1 + levels.energy * 0.8);
-    const rr = r * (0.65 + (i % 4) * 0.1);
-    ctx.strokeStyle = i % 2 === 0 ? "#a8f0ff" : "#60c0ff";
-    ctx.lineWidth = 1.4 + levels.mid * 2.5;
-    ctx.shadowColor = "rgba(120, 220, 255, 0.8)";
-    ctx.shadowBlur = 8;
-    ctx.beginPath();
-    ctx.arc(0, 0, rr, a0, a0 + 0.7 + levels.bass * 0.4);
-    ctx.stroke();
-  }
-
-  ctx.restore();
-}
-
-function drawLightningOrb(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  r: number,
-  levels: Levels,
-  t: number,
-) {
-  ctx.save();
-  ctx.translate(cx, cy);
-
-  const palette = ["#ff2a6d", "#9b5de5", "#00f5d4", "#fee440", "#00bbf9", "#f15bb5"];
-  const col = palette[Math.floor(t * 1.5) % palette.length];
-
-  const aura = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 1.8);
-  aura.addColorStop(0, `rgba(255,255,255,${0.55 + levels.beat * 0.3})`);
-  aura.addColorStop(0.25, col + "aa");
-  aura.addColorStop(0.6, "rgba(40, 10, 60, 0.5)");
-  aura.addColorStop(1, "transparent");
-  ctx.fillStyle = aura;
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 1.8, 0, Math.PI * 2);
-  ctx.fill();
-
-  const core = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
-  core.addColorStop(0, "#ffffff");
-  core.addColorStop(0.3, col + "ee");
-  core.addColorStop(0.7, "rgba(30, 5, 50, 0.85)");
-  core.addColorStop(1, "rgba(10, 0, 20, 0.3)");
-  ctx.fillStyle = core;
-  ctx.shadowColor = col;
-  ctx.shadowBlur = 24 + levels.energy * 40;
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-
-  if (levels.beat > 0.25 || levels.energy > 0.35) {
-    ctx.globalAlpha = 0.7 + levels.beat * 0.3;
-    ctx.lineWidth = 1.5 + levels.high * 2;
-    ctx.lineJoin = "round";
-    ctx.shadowColor = "rgba(200, 240, 255, 0.9)";
-    ctx.shadowBlur = 10;
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + t * 3 + levels.beat;
-      ctx.strokeStyle = i % 2 === 0 ? "#e8f7ff" : col;
+    ctx.save();
+    ctx.rotate(spin * 0.9);
+    ctx.scale(1, scaleY);
+    for (let band = 0; band < 2; band++) {
+      const bandR = r * (1.15 + band * 0.22);
+      const g = ctx.createLinearGradient(-bandR, 0, bandR, 0);
+      const a = 0.55 - band * 0.15 + levels.energy * 0.25;
+      g.addColorStop(0, "transparent");
+      g.addColorStop(0.25, `rgba(255, 140, 40, ${a})`);
+      g.addColorStop(0.5, `rgba(255, 230, 160, ${a * 1.1})`);
+      g.addColorStop(0.75, `rgba(255, 100, 30, ${a})`);
+      g.addColorStop(1, "transparent");
+      ctx.strokeStyle = g;
+      ctx.lineWidth = r * (0.1 - band * 0.03) * (1 + levels.bass * 0.4);
+      ctx.shadowColor = "rgba(255, 140, 40, 0.85)";
+      ctx.shadowBlur = 12 + levels.energy * 14;
       ctx.beginPath();
-      let x = Math.cos(a) * r * 0.15;
-      let y = Math.sin(a) * r * 0.15;
-      ctx.moveTo(x, y);
-      for (let s = 0; s < 6; s++) {
-        const jitter = (Math.sin(t * 20 + i * 7 + s * 3) * 0.5 + 0.5) * r * 0.12;
-        x += Math.cos(a + Math.sin(t * 8 + s) * 0.6) * (r * 0.2);
-        y += Math.sin(a + Math.cos(t * 8 + s) * 0.6) * (r * 0.2);
-        ctx.lineTo(x + jitter, y - jitter);
-      }
+      ctx.ellipse(0, 0, bandR, bandR, 0, 0, Math.PI * 2);
       ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.restore();
+
+    if (multi) {
+      ctx.save();
+      ctx.rotate(spin * 0.45 + 0.8);
+      ctx.scale(1, 0.22);
+      ctx.globalAlpha = 0.4 + levels.mid * 0.25;
+      ctx.strokeStyle = "rgba(255, 180, 80, 0.7)";
+      ctx.lineWidth = r * 0.08;
+      ctx.shadowColor = "rgba(255, 140, 40, 0.8)";
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r * 1.35, r * 1.35, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
-  ctx.restore();
-}
-
-function drawGlowOrb(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  r: number,
-  levels: Levels,
-  _t: number,
-) {
-  ctx.save();
-  ctx.translate(cx, cy);
-
-  const aura = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 2.1);
-  aura.addColorStop(0, `rgba(255, 240, 180, ${0.45 + levels.beat * 0.28})`);
-  aura.addColorStop(0.35, `rgba(255, 180, 50, ${0.28 + levels.energy * 0.22})`);
-  aura.addColorStop(0.7, "rgba(255, 100, 20, 0.12)");
-  aura.addColorStop(1, "transparent");
-  ctx.fillStyle = aura;
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 2.1, 0, Math.PI * 2);
-  ctx.fill();
-
-  const g = ctx.createRadialGradient(-r * 0.2, -r * 0.25, 0, 0, 0, r * 1.2);
-  g.addColorStop(0, "#fffef5");
-  g.addColorStop(0.3, "rgba(255, 220, 100, 0.95)");
-  g.addColorStop(0.6, "rgba(255, 150, 40, 0.8)");
-  g.addColorStop(0.85, "rgba(200, 80, 15, 0.45)");
-  g.addColorStop(1, "transparent");
-  ctx.fillStyle = g;
-  ctx.shadowColor = "rgba(255, 160, 40, 0.95)";
-  ctx.shadowBlur = 32 + levels.energy * 40;
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 1.15, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-
-  ctx.globalAlpha = 0.55;
-  const hi = ctx.createRadialGradient(-r * 0.3, -r * 0.35, 0, -r * 0.3, -r * 0.35, r * 0.5);
-  hi.addColorStop(0, "rgba(255,255,255,0.75)");
-  hi.addColorStop(1, "transparent");
-  ctx.fillStyle = hi;
-  ctx.beginPath();
-  ctx.arc(-r * 0.25, -r * 0.3, r * 0.45, 0, Math.PI * 2);
-  ctx.fill();
+  // Beat flash ring for all styles
+  if (levels.beat > 0.2) {
+    ctx.beginPath();
+    ctx.arc(0, 0, r * (1.05 + levels.beat * 0.08), 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,255,255,${0.15 + levels.beat * 0.35})`;
+    ctx.lineWidth = 2 + levels.beat * 3;
+    ctx.shadowColor = "rgba(255,255,255,0.6)";
+    ctx.shadowBlur = 12;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
 
   ctx.restore();
 }
